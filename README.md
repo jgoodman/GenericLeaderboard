@@ -1,7 +1,7 @@
 GenericLeaderboard
 ==================
 
-A leaderboard for competitive gaming.
+A leaderboard for competitive gaming!
 
 
 About
