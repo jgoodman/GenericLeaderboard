@@ -27,18 +27,18 @@ A list of things todo!
 - [ ] main
   - [x] Start coding on this
   - [ ] Come up with acceptance criteria
-    - [ ] Check aliases and use those instead when listing ranks
+    - Check aliases and use those instead when listing ranks
   - [ ] Finish coding this out
   - [ ] Add POD for this method
   - [ ] Review acceptance criteria
 - [ ] settings
   - [ ] Start coding on this
   - [ ] Acceptance criteria
-    - [ ] Allow app title to be set, defaults to "GenericLeaderboard"
-    - [ ] Set alias for "map"
-    - [ ] Set alias for "map_group"
-    - [ ] Set alias for "round"
-    - [ ] Set alias for "round_group"
+    - Allow app title to be set, defaults to "GenericLeaderboard"
+    - Set alias for "map"
+    - Set alias for "map_group"
+    - Set alias for "round"
+    - Set alias for "round_group"
   - [ ] Finish coding this out
   - [ ] Add POD for this method
   - [ ] Review acceptance criteria
