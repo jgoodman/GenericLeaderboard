@@ -1,0 +1,1088 @@
+#!/usr/bin/perl
+
+use strict;
+use warnings;
+
+use DBI;
+use CGI::Carp qw(fatalsToBrowser);
+
+use base qw(CGI::Ex::App);
+
+__PACKAGE__->navigate;
+
+sub _dsn {
+    my $self = shift;
+    return 'dbi:mysql:database='. $self->_dbname .';host='. $self->_dbhost .';port='. $self->_dbport;
+}
+
+sub _dbname { 'db_name' }   #TODO conf this
+sub _dbhost { 'localhost' } #TODO conf this
+sub _dbport { 3306 }        #TODO conf this
+sub _dbuser { 'db_user' }   #TODO conf this
+sub _dbpass { 'db_pass' }   #TODO conf this
+
+sub server_url { 'example.com' }; #TODO conf this
+
+sub webroot { '/var/www/html/' }; #TODO conf this
+
+sub app_dirname { 'glb/' }; #TODO conf this
+
+sub app_path {
+    my $self = shift;
+    return $self->webroot . $self->app_dirname;
+};
+
+sub template_path { shift->app_path . 'tt' }
+
+sub hash_base {
+    my $self = shift;
+    my $url = 'http://'. $self->server_url .'/'. $self->app_dirname;
+    return {
+        app_title => 'Generic Leaderboard',
+        css       =>  $url.'/media/style.css',
+        tabs      => [
+            { value=>'Rankings', href=>$url.'cgi/leaderboard',        step=>''       },
+            { value=>'Titles',   href=>$url.'cgi/leaderboard/titles', step=>'titles' },
+        ],
+    };
+}
+
+sub return_validation {
+    my $self = shift;
+    my $hash = shift;
+
+    my $ret = {
+        'group no_confirm' => 1,
+        'group no_alert'   => 1,
+    };
+
+    foreach my $key (keys %$hash) {
+        $ret->{$key} = $hash->{$key};
+    }
+
+    return $ret;
+}
+
+sub main_hash_swap {
+    my $self = shift;
+
+    my $avg_score = $self->_dbh->selectall_arrayref(
+        q{
+SELECT p.name AS player_name,
+       pt2.name AS player_type,
+       ROUND(AVG(rgs.score), 2) AS avg_score,
+       count(*) AS round_count
+  FROM round_group_score rgs
+  JOIN round_group rg ON rgs.round_group_id = rg.id
+  JOIN player_team pt ON rgs.player_team_id = pt.id
+  JOIN player p ON pt.player_id = p.id
+  JOIN player_type pt2 ON p.player_type_id = pt2.id
+  JOIN team t ON pt.team_id = t.id
+ GROUP BY p.name, pt2.name
+HAVING round_count > 4
+ ORDER BY avg_score DESC
+        },
+        {Slice => {}}
+    );
+
+    my $num = 1;
+    foreach my $row (@$avg_score) {
+        $row->{'rank'} = $num;
+        $num++;
+    }
+
+    my $avg_rank = $self->_dbh->selectall_arrayref(
+        q{
+SELECT player_name,
+       player_type_name,
+       ROUND(AVG(player_rank), 2) as avg_rank,
+       count(*) as round_count
+  FROM (
+     SELECT player_name
+          , player_type_name
+          , round_group_id
+          , player_score
+          , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+          , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+          , @round_group:=round_group_id AS rg
+          , @roundr_score:=player_score AS rs
+       FROM
+         (SELECT @player_real:= 0) AS pr1,
+         (SELECT @player:= 0) AS p1,
+         (SELECT @round_group:= 0) AS rg1,
+         (SELECT @roundr_score:= 0) AS rs1,
+         (
+          SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+            FROM round_group_score rgs
+            JOIN round_group rg ON rgs.round_group_id = rg.id
+            JOIN player_team pt ON rgs.player_team_id = pt.id
+            JOIN player p ON pt.player_id = p.id
+            JOIN player_type pt2 ON p.player_type_id = pt2.id
+            JOIN team t ON pt.team_id = t.id
+           ORDER BY rg.id, rgs.score DESC) AS temp
+       ) AS temp2
+ GROUP BY player_name
+HAVING round_count > 4
+ ORDER BY avg_rank
+        },
+        {Slice=>{}}
+    );
+
+    $num = 1;
+    foreach my $row (@$avg_rank) {
+        $row->{'rank_rank'} = $num;
+        $num++;
+    }
+
+    my $map_winners = $self->_dbh->selectall_arrayref(
+        q{
+SELECT m1.map_name
+     , m1.max_wins AS map_wins
+     , GROUP_CONCAT(m2.player_name SEPARATOR ', ') as winners
+  FROM (
+     SELECT map_name, MAX(player_wins) AS max_wins
+       FROM (
+          SELECT m.name AS map_name, p.name AS player_name, count(*) AS player_wins
+            FROM round r
+            JOIN map m ON r.map_id = m.id
+            JOIN player_team pt ON r.winner_player_team_id = pt.id
+            JOIN player p ON pt.player_id = p.id
+            JOIN player_type pt2 ON p.player_type_id = pt2.id
+            JOIN team t ON pt.team_id = t.id
+           GROUP BY map_name, player_name
+            ) temp
+      GROUP BY map_name
+       ) m1
+  JOIN (SELECT m.name AS map_name, p.name AS player_name, count(*) AS player_wins
+          FROM round r
+          JOIN map m ON r.map_id = m.id
+          JOIN player_team pt ON r.winner_player_team_id = pt.id
+          JOIN player p ON pt.player_id = p.id
+          JOIN player_type pt2 ON p.player_type_id = pt2.id
+          JOIN team t ON pt.team_id = t.id
+         GROUP BY map_name, player_name) m2 ON m1.map_name = m2.map_name AND m1.max_wins = m2.player_wins
+GROUP BY m1.map_name, m1.max_wins
+ORDER BY m1.map_name
+        },
+        {Slice=>{}},
+    );
+
+    my $circuit_winners = $self->_dbh->selectall_arrayref(
+        q{
+SELECT m1.circuit_name AS circuit_name
+    , m1.max_wins AS circuit_wins
+    , GROUP_CONCAT(m2.player_name SEPARATOR ', ') as winners
+ FROM (
+    SELECT circuit_name, MAX(player_wins) AS max_wins
+      FROM (
+         SELECT mg.name AS circuit_name, p.name AS player_name, count(*) AS player_wins
+           FROM round r
+           JOIN map m ON r.map_id = m.id
+           JOIN map_group mg ON m.map_group_id = mg.id
+           JOIN player_team pt ON r.winner_player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          GROUP BY circuit_name, player_name
+           ) temp
+     GROUP BY circuit_name
+      ) m1
+ JOIN (SELECT mg.name AS circuit_name, p.name AS player_name, count(*) AS player_wins
+         FROM round r
+         JOIN map m ON r.map_id = m.id
+           JOIN map_group mg ON m.map_group_id = mg.id
+         JOIN player_team pt ON r.winner_player_team_id = pt.id
+         JOIN player p ON pt.player_id = p.id
+         JOIN player_type pt2 ON p.player_type_id = pt2.id
+         JOIN team t ON pt.team_id = t.id
+        GROUP BY circuit_name, player_name) m2 ON m1.circuit_name = m2.circuit_name AND m1.max_wins = m2.player_wins
+GROUP BY m1.circuit_name, m1.max_wins
+ORDER BY m1.circuit_name
+        },
+        {Slice=>{}},
+    );
+
+    return {
+        avg_score => $avg_score,
+        avg_rank  => $avg_rank,
+        map_winners => $map_winners,
+        circuit_winners => $circuit_winners,
+    };
+}
+
+sub titles_hash_swap {
+    my $self = shift;
+    return {
+        titles => [
+            {
+                name => 'Streaker',
+                desc => 'Greatest improvement over past week or 2',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as streaker
+  FROM (
+SELECT all_time.player_name
+     , past_week.avg_score - all_time.avg_score AS score_diff
+FROM (SELECT p.name AS player_name
+           , pt2.name AS player_type
+           , ROUND(AVG(rgs.score), 2) AS avg_score
+           , count(*) AS round_count
+        FROM round_group_score rgs
+        JOIN round_group rg ON rgs.round_group_id = rg.id
+        JOIN player_team pt ON rgs.player_team_id = pt.id
+        JOIN player p ON pt.player_id = p.id
+        JOIN player_type pt2 ON p.player_type_id = pt2.id
+        JOIN team t ON pt.team_id = t.id
+       GROUP BY p.name, pt2.name
+       HAVING round_count > 4
+       ORDER BY avg_score DESC
+       ) all_time
+JOIN (SELECT p.name AS player_name
+           , pt2.name AS player_type
+           , ROUND(AVG(rgs.score), 2) AS avg_score
+           , count(*) AS round_count
+        FROM round_group_score rgs
+        JOIN round_group rg ON rgs.round_group_id = rg.id
+        JOIN player_team pt ON rgs.player_team_id = pt.id
+        JOIN player p ON pt.player_id = p.id
+        JOIN player_type pt2 ON p.player_type_id = pt2.id
+        JOIN team t ON pt.team_id = t.id
+       WHERE rg.round_group_date >= DATE_SUB(NOW(),INTERVAL 1 WEEK) -- only those in past week
+       GROUP BY p.name, pt2.name
+       ORDER BY avg_score DESC
+       ) past_week ON all_time.player_name = past_week.player_name
+ORDER BY score_diff DESC
+LIMIT 1) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Burninator',
+                desc => 'Greatest decrease over past week or 2',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as burninator
+  FROM (
+SELECT all_time.player_name
+     , past_week.avg_score - all_time.avg_score AS score_diff
+FROM (SELECT p.name AS player_name
+           , pt2.name AS player_type
+           , ROUND(AVG(rgs.score), 2) AS avg_score
+           , count(*) AS round_count
+        FROM round_group_score rgs
+        JOIN round_group rg ON rgs.round_group_id = rg.id
+        JOIN player_team pt ON rgs.player_team_id = pt.id
+        JOIN player p ON pt.player_id = p.id
+        JOIN player_type pt2 ON p.player_type_id = pt2.id
+        JOIN team t ON pt.team_id = t.id
+       GROUP BY p.name, pt2.name
+       HAVING round_count > 4
+       ORDER BY avg_score DESC
+       ) all_time
+JOIN (SELECT p.name AS player_name
+           , pt2.name AS player_type
+           , ROUND(AVG(rgs.score), 2) AS avg_score
+           , count(*) AS round_count
+        FROM round_group_score rgs
+        JOIN round_group rg ON rgs.round_group_id = rg.id
+        JOIN player_team pt ON rgs.player_team_id = pt.id
+        JOIN player p ON pt.player_id = p.id
+        JOIN player_type pt2 ON p.player_type_id = pt2.id
+        JOIN team t ON pt.team_id = t.id
+       WHERE rg.round_group_date >= DATE_SUB(NOW(),INTERVAL 1 WEEK) -- only those in past week
+       GROUP BY p.name, pt2.name
+       ORDER BY avg_score DESC
+       ) past_week ON all_time.player_name = past_week.player_name
+ORDER BY score_diff
+LIMIT 1) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Map Hacker',
+                desc => 'Most map wins total',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as map_hacker
+  FROM (
+         SELECT p.name AS player_name, count(*) AS player_wins
+           FROM round r
+           JOIN map m ON r.map_id = m.id
+           JOIN player_team pt ON r.winner_player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          GROUP BY player_name
+          ORDER BY player_wins DESC
+          LIMIT 1
+          ) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Biggest Cheater (aka Toad)',
+                desc => 'Most 1st place finishes',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as biggest_cheater
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Bride\'s Maid',
+                desc => 'Most 2nd place finishes',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as brides_maid
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 2 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 2 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Three\'s a Crowd',
+                desc => 'Most 3rd place finishes',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as threes_a_crowd
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 3 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 3 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Unlucky 7',
+                desc => 'Most 7th place finishes',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as threes_a_crowd
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 7 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 7 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Biggest Loser',
+                desc => 'Most 8th place finishes',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as threes_a_crowd
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 8 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 8 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Warming up',
+                desc => 'Most 1st place finishes on a non-first game of the day',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name AS warming_up
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          WHERE EXISTS (SELECT 1 FROM round_group rg2 WHERE rg.id > rg2.id AND rg.round_group_date = rg2.round_group_date)
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Early Bird',
+                desc => 'Most 1st place finishes on a first game of the day',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name AS early_bird
+  FROM (
+SELECT player_name
+     , player_type_name
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) AS round_group_wins
+     , count(*) as round_count
+     , SUM(CASE WHEN player_rank_real = 1 THEN 1 ELSE 0 END) / count(*) AS win_percentage
+ FROM (
+    SELECT player_name
+         , player_type_name
+         , round_group_id
+         , player_score
+         , @player_real:=CASE WHEN @round_group <> round_group_id THEN 1 WHEN @roundr_score = player_score THEN @player_real ELSE @player+1 END AS player_rank_real
+         , @player:=CASE WHEN @round_group <> round_group_id THEN 1 ELSE @player+1 END AS player_rank
+         , @round_group:=round_group_id AS rg
+         , @roundr_score:=player_score AS rs
+      FROM
+        (SELECT @player_real:= 0) AS pr1,
+        (SELECT @player:= 0) AS p1,
+        (SELECT @round_group:= 0) AS rg1,
+        (SELECT @roundr_score:= 0) AS rs1,
+        (
+         SELECT rg.id AS round_group_id, p.id AS player_id, p.name AS player_name, pt2.name AS player_type_name, rgs.score AS player_score
+           FROM round_group_score rgs
+           JOIN round_group rg ON rgs.round_group_id = rg.id
+           JOIN player_team pt ON rgs.player_team_id = pt.id
+           JOIN player p ON pt.player_id = p.id
+           JOIN player_type pt2 ON p.player_type_id = pt2.id
+           JOIN team t ON pt.team_id = t.id
+          WHERE NOT EXISTS (SELECT 1 FROM round_group rg2 WHERE rg.id > rg2.id AND rg.round_group_date = rg2.round_group_date)
+          ORDER BY rg.id, rgs.score DESC) AS temp
+      ) AS temp2
+GROUP BY player_name
+HAVING round_count > 4
+ORDER BY round_group_wins DESC, win_percentage DESC
+limit 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Stay on Target',
+                desc => 'Having steady deviation',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name AS stay_on_targer
+  FROM (
+SELECT p.name AS player_name
+     , pt2.name AS player_type
+     , ROUND(AVG(rgs.score), 2) AS avg_score
+     , STDDEV_POP(rgs.score) AS std_dev
+     , count(*) AS round_count
+ FROM round_group_score rgs
+ JOIN round_group rg ON rgs.round_group_id = rg.id
+ JOIN player_team pt ON rgs.player_team_id = pt.id
+ JOIN player p ON pt.player_id = p.id
+ JOIN player_type pt2 ON p.player_type_id = pt2.id
+ JOIN team t ON pt.team_id = t.id
+GROUP BY p.name, pt2.name
+HAVING round_count > 4
+ORDER BY std_dev
+LIMIT 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Wild Card',
+                desc => 'Having unpredictable deviation',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name AS wild_card
+  FROM (
+SELECT p.name AS player_name
+     , pt2.name AS player_type
+     , ROUND(AVG(rgs.score), 2) AS avg_score
+     , STDDEV_POP(rgs.score) AS std_dev
+     , count(*) AS round_count
+ FROM round_group_score rgs
+ JOIN round_group rg ON rgs.round_group_id = rg.id
+ JOIN player_team pt ON rgs.player_team_id = pt.id
+ JOIN player p ON pt.player_id = p.id
+ JOIN player_type pt2 ON p.player_type_id = pt2.id
+ JOIN team t ON pt.team_id = t.id
+GROUP BY p.name, pt2.name
+HAVING round_count > 4
+ORDER BY std_dev DESC
+LIMIT 1
+) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Odd Man Out',
+                desc => 'Highest % of odd points scored in round_groups',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as odd_man_out
+  FROM (
+SELECT p.name AS player_name
+     , pt2.name AS player_type
+     , SUM(CASE WHEN rgs.score % 2 = 1 THEN 1 ELSE 0 END) AS odd_wins
+     , count(*) AS round_count
+     , SUM(CASE WHEN rgs.score % 2 = 1 THEN 1 ELSE 0 END) / count(*) AS odd_percent
+ FROM round_group_score rgs
+ JOIN round_group rg ON rgs.round_group_id = rg.id
+ JOIN player_team pt ON rgs.player_team_id = pt.id
+ JOIN player p ON pt.player_id = p.id
+ JOIN player_type pt2 ON p.player_type_id = pt2.id
+ JOIN team t ON pt.team_id = t.id
+GROUP BY p.name, pt2.name
+HAVING round_count > 4
+ORDER BY odd_percent DESC
+LIMIT 1) a
+                    },
+                )->[0],
+            },
+            {
+                name => 'Even Steven',
+                desc => 'Highest % of even points scored in round_groups',
+                value => $self->_dbh->selectrow_arrayref(
+                    q{
+SELECT player_name as even_steven
+  FROM (
+SELECT p.name AS player_name
+     , pt2.name AS player_type
+     , SUM(CASE WHEN rgs.score % 2 = 1 THEN 1 ELSE 0 END) AS odd_wins
+     , count(*) AS round_count
+     , SUM(CASE WHEN rgs.score % 2 = 1 THEN 1 ELSE 0 END) / count(*) AS odd_percent
+ FROM round_group_score rgs
+ JOIN round_group rg ON rgs.round_group_id = rg.id
+ JOIN player_team pt ON rgs.player_team_id = pt.id
+ JOIN player p ON pt.player_id = p.id
+ JOIN player_type pt2 ON p.player_type_id = pt2.id
+ JOIN team t ON pt.team_id = t.id
+GROUP BY p.name, pt2.name
+HAVING round_count > 4
+ORDER BY odd_percent
+LIMIT 1) a
+                    },
+                )->[0],
+            },
+        ],
+    };
+}
+
+sub search_hash_swap {
+    my $self = shift;
+    return {
+        players => $self->_player_list,
+        maps    => $self->_map_list,
+    };
+}
+
+sub search_hash_validation {
+    my $self = shift;
+    $self->return_validation({
+        player => {
+            desc => 'player name',
+            enum => $self->_player_list,
+            validate_if => 'player',
+        },
+        map => {
+            desc => 'map used during rounds played',
+            enum => $self->_map_list,
+            validate_if => 'map',
+        },
+        score => {
+            desc => 'score awarded from rounds played',
+            type => 'UINT',
+            validate_if => 'score',
+        },
+        date => {
+            desc => 'date of round played',
+        },
+    });
+}
+
+sub search_finalize {
+    my $self = shift;
+    my $form = $self->form;
+
+    my $lookup_args = { };
+
+    foreach my $key ('player', 'map', 'date') {
+        $lookup_args->{$key} = $form->{$key} if $form->{$key}
+    }
+
+    $lookup_args->{'score'} = $form->{'score'} if defined $form->{'score'}; 
+    my $records = $self->_lookup;
+
+    $self->add_to_form({results => $records});
+    return 0;
+}
+
+sub _lookup {
+    my $self = shift;
+    my $args = shift;
+    #TODO: code more here
+    my $records = [ ];
+    return $records;
+}
+
+sub _player_list {
+    my $self = shift;
+    my $args = shift;
+
+    my $sql = "SELECT * FROM player";
+    my @bind = ();
+
+    if($args->{'name'}) {
+        $sql .= ' WHERE name = ?';
+        push @bind, $args->{'name'};
+    }
+
+    if($args->{'order_by'}) {
+        $sql .= ' ORDER BY ?';
+        push @bind, $args->{'order_by'};
+    }
+
+    return $self->_dbh->selectall_arrayref($sql, { Slice => {} }, @bind);
+}
+
+sub _player_type_list {
+    my $self = shift;
+    my $args = shift;
+
+    my $sql = "SELECT * FROM player_type";
+    my @bind = ();
+
+    if($args->{'name'}) {
+        $sql .= ' WHERE name = ?';
+        push @bind, $args->{'name'};
+    }
+
+    return $self->_dbh->selectall_arrayref($sql, { Slice => {} }, @bind);
+}
+
+sub _player_type_add {
+    my $self = shift;
+    my $args = shift;
+
+    my $insert = eval {$self->_dbh->do(
+        "INSERT INTO player_type (name) VALUES (?)",
+        { },
+        $args->{'name'},
+    ) };
+
+    unless($insert) {
+        return $self->_dbh->errstr;
+    }
+
+    return '';
+}
+
+sub _player_add {
+    my $self = shift;
+    my $args = shift;
+
+    $self->_dbh->do(
+        "INSERT INTO",
+        { },
+
+    );
+
+    return '';
+}
+
+sub _map_list {
+    my $self = shift;
+    my $args = shift;
+
+    my $sql = "SELECT * FROM map";
+    my @bind = ();
+
+    return $self->_dbh->selectall_arrayref($sql, { Slice => {} }, @bind);
+}
+
+sub _dbh {
+    my $self = shift;
+    return $self->{'_dbh'} ||= DBI->connect($self->_dsn, $self->_dbuser, $self->_dbpass, {RaiseError => 1}) or die $DBI::errstr;
+}
+
+sub add_score_hash_swap {
+    my $self = shift;
+    return {
+        maps    => $self->_map_list,
+        players => $self->_player_list({order_by=>'name'}),
+    };
+}
+
+sub add_score_hash_validation {
+    my $self = shift;
+    $self->return_validation({
+        name => {
+            requried => 1,
+        },
+        type_id => {
+            type => 'UINT',
+            required => 1,
+        },
+    });
+}
+
+sub add_score_finalize {
+    my $self = shift;
+    my $form = $self->form;
+
+    #my $records = $self->_lookup;
+    #$self->add_to_form({results => $records});
+    return 0;
+}
+
+sub add_player_hash_swap {
+    my $self = shift;
+    return {
+        types => $self->_player_type_list,
+    };
+}
+
+sub add_player_hash_validation {
+    my $self = shift;
+    $self->return_validation({
+        name => {
+            requried => 1,
+            match => 'm/\w+/',
+        },
+        type_id => {
+            type => 'UINT',
+            required => 1,
+        },
+    });
+}
+
+sub add_player_finalize {
+    my $self = shift;
+    my $form = $self->form;
+    #my $records = $self->_lookup;
+    #$self->add_to_form({results => $records});
+    return 0;
+}
+
+sub install_hash_swap {
+    my $self = shift;
+
+    my $install_tables = $self->_install_tables;
+
+    my $insert_player_types = [ ];
+
+    foreach my $type ('human', 'bot') {
+        my $list = $self->_player_type_list({name => $type});
+
+        if(scalar @$list > 0) {
+            push @$insert_player_types, $self->_span_not_ok("player_type '$type' exists");
+        }
+        else {
+            my $error = $self->_player_type_add({name => $type});
+
+            my $msg = ($error eq '') ?
+                $self->_span_ok("'$type' added") :
+                $self->_span_not_ok($error);
+
+            push @$insert_player_types, $msg;
+        }
+    }
+
+    return {
+        created      => $install_tables,
+        player_types => $insert_player_types,
+    };
+}
+
+sub _span_ok {
+    my $self = shift;
+    my $msg  = shift;
+    return "<span style='color:green;'>Ok</span><span> - $msg</span>";
+}
+
+sub _span_not_ok {
+    my $self = shift;
+    my $msg  = shift;
+    return "<span style=\"color:red\">Not Ok</span><span> - $msg</span>";
+}
+
+sub _install_tables {
+    my $self = shift;
+
+    my $tables = $self->_create_tables_sql;
+    my $created_tables = [ ];
+
+    foreach my $table_name (keys %$tables) {
+        my $create = eval{ $self->_dbh->do($tables->{$table_name}) };
+
+        my $msg = ($create eq '0E0') ?
+            $self->_span_ok("'$table_name' created") :
+            $self->_span_not_ok($self->_dbh->errstr);
+
+        push @$created_tables, $msg;
+    }
+
+    return $created_tables;
+}
+
+sub _create_tables_sql {
+    return {
+        conf => q{
+            CREATE TABLE conf (
+                id    INT AUTO_INCREMENT PRIMARY KEY,
+                name  varchar(100),
+                value varchar(100)
+            ) ENGINE=InnoDB;
+        },
+
+        player => q{
+            CREATE TABLE player (
+                id             INT AUTO_INCREMENT PRIMARY KEY,
+                name           varchar(40),
+                player_type_id INT,
+                date_added     date
+            ) ENGINE=InnoDB;
+        },
+
+        player_type => q{
+            CREATE TABLE player_type (
+                id     INT AUTO_INCREMENT PRIMARY KEY,
+                name   varchar(40)
+            ) ENGINE=InnoDB;
+        },
+
+        team => q{
+            CREATE TABLE team (
+                id      INT AUTO_INCREMENT PRIMARY KEY,
+                name    varchar(40),
+                active  TINYINT
+            ) ENGINE=InnoDB AUTO_INCREMENT=0;
+        },
+
+        player_team => q{
+            CREATE TABLE player_team (
+                id          INT AUTO_INCREMENT PRIMARY KEY,
+                player_id   INT,
+                team_id     INT
+            ) ENGINE=InnoDB;
+        },
+
+        map => q{
+            CREATE TABLE map (
+                id            INT AUTO_INCREMENT PRIMARY KEY,
+                name          varchar(40),
+                description   varchar(80),
+                map_group_id  INT
+            ) ENGINE=InnoDB;
+        },
+
+        map_group => q{
+            CREATE TABLE map_group (
+                id      INT AUTO_INCREMENT PRIMARY KEY,
+                name    varchar(40)
+            ) ENGINE=InnoDB;
+        },
+
+        round => q{
+            CREATE TABLE round (
+                id                      INT AUTO_INCREMENT,
+                round_group_id          INT,
+                map_id                  INT,
+                winner_player_team_id   INT,
+                PRIMARY KEY(id, round_group_id)
+            ) ENGINE=InnoDB;
+        },
+
+        round_group => q{
+            CREATE TABLE round_group (
+                id       INT AUTO_INCREMENT PRIMARY KEY,
+                round_group_date    DATE
+            ) ENGINE=InnoDB;
+        },
+
+        round_score => q{
+            CREATE TABLE round_score (
+                round_id         INT,
+                player_team_id   INT,
+                score            INT,
+                PRIMARY KEY(round_id, player_team_id)
+            ) ENGINE=InnoDB;
+        },
+
+        round_group_score => q{
+            CREATE TABLE round_group_score (
+                round_group_id   INT,
+                player_team_id   INT,
+                score            INT,
+                PRIMARY KEY(round_group_id, player_team_id)
+            ) ENGINE=InnoDB;
+        },
+    };
+}
