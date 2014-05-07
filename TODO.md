@@ -9,11 +9,10 @@
 
 ## Directory Specific ##
 
-### bin ##
-
--[ ] Make this folder
--[ ] Create bin/install.pl script. This should be a wrapper for GenericLeaderboard->install()
--[ ] Create bin/upgrade.pl script. This should be a wrapper for GenericLeaderboard->upgrade()
+-[ ] bin
+  -[ ] Make this folder
+  -[ ] Create bin/install.pl script. This should be a wrapper for GenericLeaderboard->install()
+  -[ ] Create bin/upgrade.pl script. This should be a wrapper for GenericLeaderboard->upgrade()
 
 ### cgi ###
 
