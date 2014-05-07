@@ -1,0 +1,9 @@
+<div id="tabs_container">
+    <table>
+        <tr>
+            [%- FOREACH tab IN tabs %]
+            <td class="tab"[%- IF tab.step == step %] id="current_tab"[%- END %]><a href="[%- tab.href %]">[%- tab.value %]</a></td>
+            [%- END %]
+        </tr>
+    </table>
+</div>

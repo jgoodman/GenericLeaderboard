@@ -1,0 +1,44 @@
+<html>
+    <head>
+        <link rel="stylesheet" type="text/css" href="[%- css %]">
+    </head>
+    <body>
+        <div id='container'>
+            <div id='header'>
+                <h1>[%- app_title %]</h1>
+            </div>
+            <div id='content'>
+                [%- INCLUDE leaderboard/tabs.html %]
+                <div class='generic'>
+                    <h2 style="border-bottom: 0px">Titles</h2>
+                </div>
+                <div id='results'>
+                    <div class="ranking">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Title</th>
+                                    <th>Desc</th>
+                                    <th>Player Name</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                [%- FOREACH title IN titles %]
+                                <tr>
+                                    <td>[%- title.name %]</td>
+                                    <td>[%- title.desc %]</td>
+                                    <td>[%- title.value %]</td>
+                                </tr>
+                                [%- END %]
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div id='footer'>
+            </div>
+        </div>
+    </body>
+</html>
+
+[% js_validation | none %]

@@ -1,0 +1,87 @@
+<html>
+    <head>
+        <link rel="stylesheet" type="text/css" href="[%- css %]">
+    </head>
+    <body>
+        <div id='container'>
+            <div id='header'>
+                <h1>[%- app_title %]</h1>
+            </div>
+            <div id='content'>
+                <div class='generic'>
+                    <h2>Search</h2>
+                    <div class='sub_generic'>
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th>Player</th>
+                                    <th>Map</th>
+                                    <th>Score</th>
+                                    <th>Date</th>
+                                    <th></th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr>
+                                    <form name="[% form_name %]" method="post">
+                                    <td>
+                                        <select name="player">
+                                            [%- FOREACH player IN players %]
+                                            <option value="[%- player %]">[%- player %]</option>
+                                            [%- END %]
+                                        </select>                                
+                                    </td>
+                                    <td>
+                                        <select name="map">
+                                            [%- FOREACH map IN maps %]
+                                            <option value="[%- map %]">[%- map %]</option>
+                                            [%- END %]
+                                        </select>
+                                    </td>
+                                    <td><input type="text" name="score"></td>
+                                    <td><input type="text" name="date"></td>
+                                    <td><input type="submit" value="Submit"></td>
+                                    </form>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+                <div id='errors'>
+                    <span class='error' id="player_error">[%- player_error %] </span>
+                    <span class='error' id="map_error">[%- map_error %] </span>
+                    <span class='error' id="score_error">[%- score_error %] </span>
+                    <span class='error' id="date_error">[%- date_error %] </span>
+                </div>
+                <div id='results'>
+                    [%- IF results %]
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Player</th>
+                                <th>Map</th>
+                                <th>Score</th>
+                                <th>Date</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            [%- FOREACH record IN results %]
+                            <tr>
+                                <td>[%- record.player %]</td>
+                                <td>[%- record.map %]</td>
+                                <td>[%- record.score %]</td>
+                                <td>[%- record.date %]</td>
+                            </tr>
+                            [%- END %]
+                        </tbody>
+                    </table>
+                    [%- END %]
+                </div>
+            </div>
+            <div id='footer'>
+            </div>
+        </div>
+    </body>
+</html>
+
+[% js_validation | none %]

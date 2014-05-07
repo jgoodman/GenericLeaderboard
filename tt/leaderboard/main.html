@@ -1,0 +1,121 @@
+<html>
+    <head>
+        <link rel="stylesheet" type="text/css" href="[%- css %]">
+    </head>
+    <body>
+        <div id='container'>
+            <div id='header'>
+                <h1>[%- app_title %]</h1>
+            </div>
+            <div id='content'>
+                [%- INCLUDE leaderboard/tabs.html %]
+                <div class='generic'>
+                    <h2 style="border-bottom: 0px">Rankings</h2>
+                </div>
+                <span style="font-size:60%;padding:0em 2em 0em 2em;">*A minimum of 5 games are needed to be played and recorded for players to show in the rankings below.</span>
+                <div id='results'>
+                    <div id='avg_score_and_rank' style="float:left;">
+                        <div class="ranking">
+                            <h3>Average Score</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>Name</th>
+                                        <th>Player Type</th>
+                                        <th>Avg Score</th>
+                                        <th>Round Count</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    [%- FOREACH row IN avg_score %]
+                                    <tr>
+                                        <td>[%- row.rank %]</td>
+                                        <td>[%- row.player_name %]</td>
+                                        <td>[%- row.player_type %]</td>
+                                        <td>[%- row.avg_score %]</td>
+                                        <td>[%- row.round_count %]</td>
+                                    </tr>
+                                    [%- END %]
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="ranking">
+                            <h3>Average Placement</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Rank</th>
+                                        <th>Name</th>
+                                        <th>Player Type</th>
+                                        <th>Avg Rank</th>
+                                        <th>Round Count</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    [%- FOREACH row IN avg_rank %]
+                                    <tr>
+                                        <td>[%- row.rank_rank %]</td>
+                                        <td>[%- row.player_name %]</td>
+                                        <td>[%- row.player_type_name %]</td>
+                                        <td>[%- row.avg_rank %]</td>
+                                        <td>[%- row.round_count %]</td>
+                                    </tr>
+                                    [%- END %]
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    <div id="map_and_ciruit" style="float:left;">
+                        <div class="ranking">
+                            <h3>Map Winners</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Map Name</th>
+                                        <th>Winners</th>
+                                        <th>Map Wins</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    [%- FOREACH row IN map_winners %]
+                                    <tr>
+                                        <td>[%- row.map_name %]</td>
+                                        <td>[%- row.winners %]</td>
+                                        <td>[%- row.map_wins %]</td>
+                                    </tr>
+                                    [%- END %]
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="ranking">
+                            <h3>Circuit Winners</h3>
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Circuit Name</th>
+                                        <th>Winners</th>
+                                        <th>Ciruit Wins</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    [%- FOREACH row IN circuit_winners %]
+                                    <tr>
+                                        <td>[%- row.circuit_name %]</td>
+                                        <td>[%- row.winners %]</td>
+                                        <td>[%- row.circuit_wins %]</td>
+                                    </tr>
+                                    [%- END %]
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div id='footer'>
+            </div>
+        </div>
+    </body>
+</html>
+
+[% js_validation | none %]
